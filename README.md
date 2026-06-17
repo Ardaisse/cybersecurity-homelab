@@ -1,3 +1,7 @@
+## 🖥️ Infrastructure View
+![Proxmox](https://github.com/user-attachments/assets/cb8dbc24-3ba1-4895-a1b8-4f2a1d6469ff)
+
+
 <img width="415" height="806" alt="Screen PVE 1" src="https://github.com/user-attachments/assets/cb8dbc24-3ba1-4895-a1b8-4f2a1d6469ff" />
 
 
@@ -81,6 +85,17 @@ Centralized logs analysis and detection of abnormal behavior.
 
 ### 3. Linux Hardening
 System hardening and monitoring (SSH, services, logs).
+
+### 4. Automated Threat Blocking (CrowdSec)
+
+Detection of malicious behaviors (brute-force, scans, web attacks) through log analysis.
+
+- Real-time decision engine (ban / captcha / block)
+- Automatic enforcement via HAProxy and firewall bouncers
+- Community threat intelligence integration
+
+Result: Autonomous protection of exposed services.
+
 
 ---
 
