@@ -1,8 +1,6 @@
 ## 🖥️ Infrastructure View
+
 ![Proxmox](https://github.com/user-attachments/assets/cb8dbc24-3ba1-4895-a1b8-4f2a1d6469ff)
-
-
-<img width="415" height="806" alt="Screen PVE 1" src="https://github.com/user-attachments/assets/cb8dbc24-3ba1-4895-a1b8-4f2a1d6469ff" />
 
 
 # 🔐 Cybersecurity Homelab – Florian
