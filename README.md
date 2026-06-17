@@ -1,5 +1,4 @@
-<img width="3400" height="1231" alt="image" src="https://github.com/user-attachments/assets/17a4f6d0-0391-4bd6-a8b1-29e91b93ed61" />
-
+<img width="415" height="806" alt="Screen PVE 1" src="https://github.com/user-attachments/assets/cb8dbc24-3ba1-4895-a1b8-4f2a1d6469ff" />
 
 
 # 🔐 Cybersecurity Homelab – Florian
