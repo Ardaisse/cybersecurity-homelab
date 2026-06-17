@@ -1,0 +1,412 @@
+==================================================
+PARTIE I : INSTALLATION & CONFIGURATION DE HAPROXY
+==================================================
+
+
+Etape 1 : Installation depuis les dépôts officiels
+==================================================
+sudo apt update && sudo apt upgrade -y
+sudo apt install haproxy -y
+
+
+Etape 2 : Activer le service
+============================
+sudo systemctl enable haproxy
+
+
+Etape 3 : Préparation du Certificat SSL
+=======================================
+# Sauvegarde du fichier par défaut
+sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.bak
+
+# Editer le fichier de configuration
+sudo nano /etc/haproxy/haproxy.cfg
+# Adaptez selon votre environnement (Mot de passe, IP)
+
+Contenu :
+---------
+
+#---------------------------------------------------------------------
+# Global settings - SÉCURITÉ RENFORCÉE
+#---------------------------------------------------------------------
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+    tune.ssl.default-dh-param 2048
+    maxconn 10000
+
+#---------------------------------------------------------------------
+# Liste des utilisateurs pour les statistiques
+#---------------------------------------------------------------------
+userlist stats_users
+    user admin insecure-password MOT_DE_PASSE
+
+#---------------------------------------------------------------------
+# Defaults - SÉCURITÉ RENFORCÉE
+#---------------------------------------------------------------------
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    option  redispatch
+
+    timeout connect 5s
+    timeout client  30s
+    timeout server  30s
+    timeout http-request 10s
+    timeout http-keep-alive 5s
+
+    option http-server-close
+    option httpclose
+    maxconn 2000
+    retries 3
+
+    errorfile 400 /etc/haproxy/errors/400.http
+    errorfile 403 /etc/haproxy/errors/403.http
+    errorfile 408 /etc/haproxy/errors/408.http
+    errorfile 500 /etc/haproxy/errors/500.http
+    errorfile 502 /etc/haproxy/errors/502.http
+    errorfile 503 /etc/haproxy/errors/503.http
+    errorfile 504 /etc/haproxy/errors/504.http
+
+#---------------------------------------------------------------------
+# Frontend HTTP/HTTPS - LA PORTE D'ENTRÉE EXPOSÉE
+#---------------------------------------------------------------------
+frontend http_front
+    bind *:80
+    # ATTENTION: S'assurer que le fichier.pem existe bien
+    bind *:443 ssl crt /etc/haproxy/certs/haproxy.pem
+
+    # 1. Rate limiting (DDoS Protection)
+    stick-table type ip size 100k expire 30s store http_req_rate(10s)
+    http-request track-sc0 src
+    http-request deny deny_status 429 if { sc_http_req_rate(0) gt 10 }
+
+    # 2. Blocage bots malveillants
+    acl bad_bot hdr_sub(User-Agent) -i nikto sqlmap nmap masscan
+    http-request deny deny_status 403 if bad_bot
+
+    # 3. Anti-scan chemins sensibles
+    acl scan_attempt path_beg -i /.env /admin /phpMyAdmin /.git /wp-admin
+    http-request deny deny_status 404 if scan_attempt
+
+    # 4. Redirection HTTPS forcée
+    redirect scheme https code 301 if !{ ssl_fc }
+
+    # 5. Headers sécurité (WAF layer)
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    http-response set-header X-Frame-Options "SAMEORIGIN"
+    http-response set-header X-Content-Type-Options "nosniff"
+    http-response set-header X-XSS-Protection "1; mode=block"
+    http-response set-header Referrer-Policy "strict-origin-when-cross-origin"
+    http-response set-header Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    http-response del-header Server
+
+    # 6. Routing
+    acl is_stats path_beg /haproxy
+    use_backend stats_back if is_stats
+
+    # Par défaut, tout le trafic sain va vers Guacamole
+    default_backend guacamole_back
+
+#---------------------------------------------------------------------
+# Backend Statistiques HAProxy
+#---------------------------------------------------------------------
+backend stats_back
+    stats enable
+    stats uri /haproxy?stats
+    stats refresh 30s
+    stats admin if TRUE
+    http-request auth unless { http_auth(stats_users) }
+
+#---------------------------------------------------------------------
+# Backend GUACAMOLE - Bastion
+#---------------------------------------------------------------------
+backend guacamole_back
+    balance roundrobin
+
+    # Rate limiting spécifique aux connexions TCP vers Guacamole
+    stick-table type ip size 100k expire 30s store conn_cur,conn_rate(10s)
+    tcp-request content track-sc1 src
+    tcp-request content reject if { sc_conn_rate(1) gt 50 }
+
+    # PARAMÈTRE CRUCIAL POUR GUACAMOLE : Ne pas couper les WebSockets
+    timeout tunnel 3600s
+
+    # Indispensable : Transférer la vraie IP pour Crowdsec et Guacamole
+    option forwardfor
+    http-request set-header X-Real-IP %[src]
+    http-request set-header X-Forwarded-Proto https if { ssl_fc }
+
+    # Redirige automatiquement vers /guacamole/ si l'utilisateur tape juste votre domaine
+    http-request set-path /guacamole%[path] if { path -m str / }
+
+    # Healthcheck : vérifie que Tomcat/Guacamole répond bien
+    option httpchk
+    http-check send meth GET uri /guacamole/ ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+
+    # L'IP DU GUACAMOLE EST ICI (Vérifier si c'est le port 8080 ou 80 selon l'install)
+    server guac1 192.168.100.2:8081 check inter 2000 rise 2 fall 3 maxconn 500
+    # Dans ce cas de figure, le port de guacamole est paramétré sur 8081 afin d'éviter des conflits avec d'autres services qui portent ce port comme "Crowdsec ou Keycloak"
+
+
+
+Etape 4 : Tester & redémarrer
+=============================
+# Tester la validité du fichier de configuraation
+sudo systemctl restart haproxy
+
+# Redémarrer le service
+sudo systemctl restart haproxy
+
+# Vérification du service
+sudo systemctl status haproxy
+
+
+Etape 5 : Générer le certificat
+===============================
+sudo mkdir -p /etc/haproxy/certs
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/haproxy/certs/haproxy.pem -out /etc/haproxy/certs/haproxy.pem -subj "/CN=tondomaine.fr"
+sudo chmod 600 /etc/haproxy/certs/haproxy.pem
+
+
+Etape 6 : Accès Web
+===================
+https://IP/haproxy?stats
+
+
+
+Test de fonctionnement (HTTP & HTTPS)
+=====================================#
+1. Test HTTPS local (option -k pour ignorer l'alerte du certificat auto-signé)
+curl -Ik https://localhost/
+
+# 2. Test de la redirection automatique HTTP → HTTPS (doit renvoyer un code 301)
+curl -I http://localhost/
+
+# 3. Vérifier l'état de santé du backend Guacamole via le socket admin
+echo "show stat" | sudo socat stdio /run/run/haproxy/admin.sock | grep guacamole_back
+
+# Si Guacamole est fonctionnel sur son IP, vous verrez le mot "Up" apparaitre dans la ligne de statut du backend.
+
+
+
+🛡️ Simulation et Validation des règles du WAF
+============================================
+# Puisque nous avons configuré des limites strictes dans le fichier "haproxy.cfg" voici comment valider que le reverse proxy bloque bien les comportements malveillants.
+
+Test 1 : Blocage des Bots (User-Agent)
+--------------------------------------
+# Simulation du scanner de vulnérabilités Nikto
+curl -Ik -A "Nikto/2.1.6" https://localhost/
+# Attendu : HTTP/1.0 403 Forbidden
+
+
+Test 2 : Anti-Scan de fichiers sensibles
+----------------------------------------
+# Tentative d'accès à un fichier d'environnement ou d'administration générique
+curl -Ik https://localhost/.env
+curl -Ik https://localhost/wp-admin
+# Attendu : HTTP/1.0 404 Not Found (Bloqué à la source par HAProxy)
+
+
+Test 3 : Rate Limiting (Anti-DoS Layer 7)
+----------------------------------------
+# Dans cette configuration, la limite est fixée à 10 requêtes par 10 secondes par adresse IP.
+echo "=== TEST RATE LIMITING ==="
+for i in {1..15}; do
+    echo -n "Requête $i : "
+    curl -sk -o /dev/null -w "%{http_code}\n" https://localhost/ 
+    sleep 0.2
+done
+# Attendu : Les 10 premières requêtes renvoient "200" ou "302", puis les suivantes basculent en "429 Too Many Requests".
+
+
+
+
+
+🎬 Script de démonstration automatique pour des rapports
+========================================================
+# Afin de valider l'intégralité des protections en une seule commande, vous pouvez créer un script de test unifié directement sur la machine HaProxy.
+
+# Installation d'un paquet nécessaire :
+sudo apt install socat -y
+
+1. Création du fichier : nano ~/test_haproxy_demo.sh
+2. Collez le contenu suivant :
+
+#!/bin/bash
+clear
+echo "========================================================="
+echo "   🎬 SCRIPT DE DÉMONSTRATION DE SÉCURITÉ HAPROXY WAF   "
+echo "========================================================="
+echo ""
+
+# Réinitialisation de la table mémoire de HAProxy pour partir à zéro
+echo "clear table http_front" | sudo socat stdio /run/haproxy/admin.sock
+sleep 1
+
+echo "1️⃣ Accès légitime (Attendu: 200 OK ou 302 Redirect)"
+curl -Iks https://localhost/ | head -1
+echo ""
+
+echo "2️⃣ Blocage du scanner de vulnérabilités Nikto (Attendu: 403)"
+curl -Iks -A "Nikto/2.1.6" https://localhost/ | head -1
+echo ""
+
+echo "3️⃣ Blocage d'un scan de fichier sensible /.env (Attendu: 404)"
+curl -Iks https://localhost/.env | head -1
+echo ""
+
+echo "4️⃣ Redirection forcée du HTTP vers le HTTPS (Attendu: 301)"
+curl -Is http://localhost/ | head -1
+echo ""
+
+echo "5️⃣ Test du Rate Limiting (Seuil : 10 req / 10s)"
+echo "Envoi de 15 requêtes rapides..."
+for i in {1..15}; do
+  curl -sk -o /dev/null -w "%{http_code} " https://localhost/
+done
+echo -e "\n(Tu devrais voir une série de 200/302 se terminer par des codes 429) ✅"
+echo ""
+
+echo "6️⃣ Accès aux statistiques sécurisées (Attendu: 200 OK + HTML)"
+curl -sku admin:'MOTDEPASSE' https://localhost/haproxy?stats | grep -q "<title>" && echo "Accès aux statistiques validé !" || echo "Échec d'authentification"
+echo ""
+echo "========================================================="
+echo "✅ Tests terminés."
+
+
+3. Rendre le script exécutable et le lancer :
+chmod +x ~/test_haproxy_demo.sh
+./test_haproxy_demo.sh
+
+
+
+=====================================================
+PARTIE II : INSTALLATION & CONFIGURATION DE GUACAMOLE
+=====================================================
+
+
+Etape 1 : Dépôt et mises à jour
+===============================
+# Mise à jour et installation des prérequis
+sudo apt update && sudo apt install -y curl gnupg
+
+# Ajout du dépôt officiel Docker
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Installation de Docker Engine et Docker Compose
+sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Création du dossier du projet
+mkdir -p ~/guacamole/init
+cd ~/guacamole
+
+
+Etape 2 : Génération du schéma officiel de la base de données
+=============================================================
+# Guacamole nécessite un schéma SQL spécifique. Ne jamais télécharger manuellement depuis un site tiers. L'image Docker officielle contient un outil pour générer automatiquement le script d'initialisation correspondant exact à sa version.
+
+docker run --rm guacamole/guacamole /opt/guacamole/bin/initdb.sh --postgres > init/initdb.sql
+# Le fichier initdb.sql est maintenant prêt à être injecté de manière automatisée au premier démarrage de PostgreSQL.
+
+
+Etape 3 : Le fichier "docker-compose.yml" de production
+=======================================================
+# Editer le fichier :
+nano docker-compose.yml
+
+# A la toute fin du fichier, modifiez l'ip du serveur Reverse Proxy.
+# Modifiez également le mot de passe POSTGRES_PASSWORD des deux variables (AUCUN CARAC SPECIAUX). Postgres ne supporte pas cela.
+# Le port de ce fichier de configuration est sur 8081:8080 (à la place de 8080). Si vous avez déjà des services qui tournent sur le port 8080 alors vous aurez un conflit, d'où cette marge de sécurité. Vous êtes libre de modifier ce port à la toute fin du fichier.
+
+Contenu global :
+----------------
+
+version: '3.8'
+
+networks:
+  guac_net:
+    driver: bridge
+
+services:
+  # 1. Le moteur de rendu de protocoles (guacd)
+  guacd:
+    image: guacamole/guacd:latest
+    container_name: guacamole_guacd
+    restart: always
+    networks:
+      - guac_net
+
+  # 2. La base de données PostgreSQL officielle
+  guacdb:
+    image: postgres:15-alpine
+    container_name: guacamole_db
+    restart: always
+    environment:
+      POSTGRES_DB: guacamole_db
+      POSTGRES_USER: guacamole_user
+      POSTGRES_PASSWORD: Bastion2026
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d  # Injection automatique du schéma SQL
+      - ./dbdata:/var/lib/postgresql/data
+    networks:
+      - guac_net
+
+# 3. L'interface Web de Guacamole (Tomcat)
+  guacamole:
+    image: guacamole/guacamole:latest
+    container_name: guacamole_client
+    restart: always
+    ports:
+      - "8081:8080"
+    environment:
+      GUACD_HOSTNAME: guacd
+      GUACD_PORT: 4822
+      # --- LA NOUVELLE SYNTAXE EXACTE ICI ---
+      POSTGRESQL_HOSTNAME: guacdb
+      POSTGRESQL_DATABASE: guacamole_db
+      POSTGRESQL_USERNAME: guacamole_user
+      POSTGRESQL_PASSWORD: Bastion2026 # A REMPLACER
+      # --------------------------------------
+      TOMCAT_TRUSTED_PROXIES: IP_HAPROXY
+    depends_on:
+      - guacd
+      - guacdb
+    networks:
+      - guac_net
+
+
+Etape 4 : Lancement et vérification du Bastion
+==============================================
+# Démarrer l'ensemble de l'infrastructure en tâche de fond :
+docker compose up -d
+
+# Surveiller les logs pour s'assurer que PostgreSQL a correctement injecté le schéma SQL et que Tomcat a démarré sans erreur
+docker compose logs -f guacamole
+# Vous devriez voir apparaître une ligne indiquant : INFO: Deployment of web application archive [...] has finished
+
+
+Etape 5 : Accès Web
+===================
+http://IP:8081/guacamole/
