@@ -6,6 +6,7 @@
 
 
 # 🔐 Cybersecurity Homelab – Florian
+> 🔒 Includes active defense mechanisms (CrowdSec, IDS/IPS) with automated threat response.
 
 Personal 24/7 infrastructure focused on SOC, SIEM, Detection Engineering and Cloud Security.
 
@@ -32,9 +33,30 @@ This homelab is designed to simulate a real-world enterprise infrastructure in o
 - Reverse Proxy: HAProxy
 - DNS: PowerDNS
 
+
+## 🌐 Network Architecture
+
+- Physical firewall (Sophos) handling:
+  - Routing between VLANs
+  - NAT and external exposure
+  - Traffic inspection:
+    - Mirroring / forwarding to Suricata & Zeek
+
+- Internal segmentation:
+  - Management network
+  - Server network ((hosted services)
+  - Security monitoring network
+
+- Traffic inspection:
+  - Mirroring / forwarding to Suricata & Zeek
+
+
 ---
 
 ## 🔐 Security Stack
+
+- Sophos firewall logs forwarded to SIEM (Wazuh)
+
 
 ### SIEM
 - Wazuh
@@ -94,7 +116,18 @@ Detection of malicious behaviors (brute-force, scans, web attacks) through log a
 - Automatic enforcement via HAProxy and firewall bouncers
 - Community threat intelligence integration
 
-Result: Autonomous protection of exposed services.
+Result: Automatic blocking of malicious IPs and reduced exposure.
+
+### 5. Network Segmentation & Firewall Enforcement
+
+Implementation of network segmentation using a physical Sophos firewall.
+
+- Inter-VLAN traffic control
+- Exposure of services through controlled NAT
+- Log collection and analysis in SIEM
+
+Result: Reduced attack surface and improved traffic visibility.
+
 
 
 ---
