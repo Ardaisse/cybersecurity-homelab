@@ -21,9 +21,10 @@ This homelab is designed to simulate a real-world enterprise infrastructure in o
 
 ## 🏗️ Infrastructure Overview
 
+- Firewall: Sophos XG (physical appliance)
 - Hypervisor: Proxmox VE
 - Storage: RAID10 + Proxmox Backup Server (PBS)
-- Network: Segmented architecture
+- Network: Segmented architecture (VLANs)
 - Reverse Proxy: HAProxy
 - DNS: PowerDNS
 
@@ -35,9 +36,22 @@ This homelab is designed to simulate a real-world enterprise infrastructure in o
 - Wazuh
 - ELK Stack
 
-### Detection
+### Detection & Active Defense
+
 - Suricata (IDS)
-- Zeek
+- Zeek (Network Analysis)
+- CrowdSec (Collaborative IPS)
+
+#### CrowdSec Stack
+- CrowdSec Engine (log analysis & decisions)
+- Bouncers:
+  - HAProxy (L7 protection)
+  - Linux Firewall (iptables/nftables)
+- Collections:
+  - Linux
+  - SSH brute-force
+  - Web attacks
+
 
 ### Threat Hunting / Forensics
 - Velociraptor
