@@ -1,3 +1,7 @@
+<img width="3400" height="1231" alt="image" src="https://github.com/user-attachments/assets/17a4f6d0-0391-4bd6-a8b1-29e91b93ed61" />
+
+
+
 # 🔐 Cybersecurity Homelab – Florian
 
 Personal 24/7 infrastructure focused on SOC, SIEM, Detection Engineering and Cloud Security.
